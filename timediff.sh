@@ -1,12 +1,12 @@
 #!/bin/bash
-#ARG=${1? Error. Please provide the input file. Example: time diff.sh  filename}
-echo " THIS SCRIPT CAN TAKE SOMETIME This script will process all sessions created on the server and output a csv file analysis of any delays in login times, etc, a session can of course, take a long but automated session on HANA should complete quickly"
+#ARG=${1? Error. Please, provide the input file. Example: timediff.sh  filename}
+echo " THIS SCRIPT CAN TAKE SOMETIME This script will process all sessions created on the server and output a csv file for  analysis of any delays in login times, etc, a session can of course, take a long but automated session on HANA should complete quickly"
 inputfile=messages-20240819.txt
 session_file=session.txt
 outputfile=$inputfile-timedelays.csv
 tempfile=temp.txt
 function create_input () {
-# echo "Processing $inputfile to a temp file"
+# echo "Processing $inputfile to temp file"
 grep '.scope: Deactivated successfully.\|Started Session' $inputfile |sed 's/session-/End session-/g'  | sed 's/Started Session /Start session-/g' | sed -e 's/azlsapd9pdb01 systemd\[1\]://g'| sed 's/.scope:/ scope:/g'  > $tempfile
 
 #echo " Sorting file"
@@ -28,7 +28,7 @@ readarray -t my_array  < <( grep session- $tempfile | cut -d " " -f4 | cut -d "-
 #long no longer needed session=$(grep session-c11416098 filetest.txt | cut -d " " -f4 | cut -d "-" -f 2| uniq)
 
 function csv_header (){
-echo " Removing all outpout file"
+echo " Removing old output files"
 rm $outputfile
 echo login session,start time, end time , elapsed time in sec >> $outputfile
 }
@@ -39,18 +39,21 @@ cat $session_file | while read line
         do
         echo "Processing session $line"
         #get start end and end time
-        start=$(grep $line $tempfile | grep Start  | cut -d " " -f 1 |  sed 's/T/ /g')
+        start=$(grep $line $tempfile | grep Start  | cut -d " " -f 1 |  sed 's/T/ /g' | cut -d . -f 1)
         start_epoch=$(date -d "${start}" +"%s")
-        end=$(grep $line $tempfile | grep End  | cut -d " " -f 1 | sed 's/T/ /g')
+        end=$(grep $line $tempfile | grep End  | cut -d " " -f 1 | sed 's/T/ /g' |  cut -d . -f 1)
         end_epoch=$(date -d "${end}" +"%s")
+        user_name=$(grep $line $tempfile | grep Start  | cut -d " " -f 7  )
         #debug
         #echo $start
         #echo $start_epoch
         #echo $end
         #echo $end_epoch
         #echo $session
-        time_elapsed=$(($end_epoch- $start_epoch))
-        echo "$line,$start,$end,$time_elapsed" >> $outputfile
+        time_elapsed=$(($end_epoch-$start_epoch))
+        #f [ $time_elapsed -gt 0 ]; then
+        #fi
+        echo "$line,$user_name,$start,$end,$time_elapsed" >> $outputfile
         done
 }
 
