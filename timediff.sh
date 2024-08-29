@@ -1,12 +1,12 @@
 #!/bin/bash
-#ARG=${1? Error. Please, provide the input file. Example: timediff.sh  filename}
-echo " THIS SCRIPT CAN TAKE SOMETIME This script will process all sessions created on the server and ouput a csv fiel analysis of any delaysin login times etc, session can of course take a long but automated sesison on HANA shpould complete quickly"
+#ARG=${1? Error. Please provide the input file. Example: time diff.sh  filename}
+echo " THIS SCRIPT CAN TAKE SOMETIME This script will process all sessions created on the server and output a csv file analysis of any delays in login times, etc, a session can of course, take a long but automated session on HANA should complete quickly"
 inputfile=messages-20240819.txt
 session_file=session.txt
 outputfile=$inputfile-timedelays.csv
 tempfile=temp.txt
 function create_input () {
-# echo "Processing $inputfile to temp file"
+# echo "Processing $inputfile to a temp file"
 grep '.scope: Deactivated successfully.\|Started Session' $inputfile |sed 's/session-/End session-/g'  | sed 's/Started Session /Start session-/g' | sed -e 's/azlsapd9pdb01 systemd\[1\]://g'| sed 's/.scope:/ scope:/g'  > $tempfile
 
 #echo " Sorting file"
