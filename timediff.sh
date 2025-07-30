@@ -76,7 +76,7 @@ function cleanup_files (){
 
 function csv_header (){
 	#Add header to CSV file "
-	echo login session,start time, end time , elapsed time in sec >> $outputfile
+	echo Session ID, user, start time, end time, Elapsed time in sec >> $outputfile
 }
 
 
