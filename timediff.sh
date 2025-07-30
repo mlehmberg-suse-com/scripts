@@ -153,6 +153,6 @@ csv_header
 #session_array
 create_sessions_file
 process_session
-#cleanup_files
+cleanup_files
 no_zero_second_lines
 report_output_file
