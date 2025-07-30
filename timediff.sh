@@ -55,12 +55,12 @@ cat $session_file | while read line
         start=$(grep $line $tempfile | grep Start  | cut -d " " -f 1 |  sed 's/T/ /g' | cut -d . -f 1)
         start_epoch=$(date -d "${start}" +"%s")
         end=$(grep $line $tempfile | grep End  | cut -d " " -f 1 | sed 's/T/ /g' |  cut -d . -f 1)
-        end_epoch=$(date -d "${end}" +"%s")
+        end_epoch=$(date -d " ${end}" +"%s")
         user_name=$(grep $line $tempfile | grep Start  | cut -d " " -f 8  )
         #debug
         echo $start
         echo $start_epoch
-        echo $end
+        echo " $end"
         echo $end_epoch
         echo $session
         time_elapsed=$(($end_epoch-$start_epoch))
