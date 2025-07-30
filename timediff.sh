@@ -137,7 +137,7 @@ function  report_output_file () {
 	echo "================================================================================="
 	echo " Analysis files created in $(pwd) "
        	echo " All Sessions: $outputfile."
-	echo " Non-zero second session: $nonzero_ouputfile."
+	echo " Non-zero second session: $nonzero_outputfile."
 	echo "================================================================================="
 
 }
