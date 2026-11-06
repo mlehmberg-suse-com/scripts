@@ -1,0 +1,71 @@
+To set up a Salt Reactor that creates a completion sentinel file (like /var/run/salt-onboarding-complete) on the minion, the reactor needs to listen for the highstate job return event on the Salt Master event bus, verify that the state succeeded, and execute file.touch on the target minion.
+
+Step 1: Configure the Reactor in the Salt Master Configuration
+On your Salt Master, configure the reactor hook to catch job completion events for state.apply or state.highstate.
+
+Edit /etc/salt/master.d/reactor.conf (or add it directly to /etc/salt/master):
+
+YAML
+reactor:
+  - 'salt/job/*/ret/*':
+    - /srv/reactor/onboarding_highstate_complete.sls
+Verification: Run salt-master -t or check master logs (/var/log/salt/master) after restarting salt-master to ensure no YAML syntax errors were introduced.
+
+Step 2: Create the Reactor SLS File
+Create /srv/reactor/onboarding_highstate_complete.sls on the Salt Master.
+
+This state filters events so it only runs when:
+
+The function executed was state.apply or state.highstate.
+
+The job completed successfully without failed states (data['success'] == True and no state errors).
+
+YAML
+{% set function = data.get('fun', '') %}
+{% set minion_id = data.get('id', '') %}
+{% set job_success = data.get('success', False) %}
+{% set ret_data = data.get('return', {}) %}
+
+{# Check if the run was a highstate and was successful #}
+{% if function in ['state.apply', 'state.highstate'] and job_success %}
+  {# Ensure none of the individual states returned False #}
+  {% set failed_states = [] %}
+  {% if ret_data is mapping %}
+    {% for state_id, result in ret_data.items() %}
+      {% if result is mapping and not result.get('result', True) %}
+        {% do failed_states.append(state_id) %}
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+
+  {% if failed_states | length == 0 %}
+touch_completion_flag:
+  local.file.touch:
+    - tgt: {{ minion_id }}
+    - arg:
+      - /var/run/salt-onboarding-complete
+  {% endif %}
+{% endif %}
+Verification: Monitor the master event bus in real time by running salt-run state.event pretty=True on the master while triggering a highstate. When it finishes, you should see the file.touch event dispatching to the minion.
+
+Step 3: Restart the Salt Master Service
+Reload or restart the Salt master to load the reactor configuration:
+
+Bash
+sudo systemctl restart salt-master
+Step 4: Handle the Flag in Ansible
+In your Ansible playbook, you can now use ansible.builtin.wait_for to block execution until this flag file exists on the target host:
+
+YAML
+- name: Wait for Salt initial highstate to complete
+  ansible.builtin.wait_for:
+    path: /var/run/salt-onboarding-complete
+    state: present
+    timeout: 900
+    delay: 5
+
+- name: Clean up onboarding flag file
+  ansible.builtin.file:
+    path: /var/run/salt-onboarding-complete
+    state: absent
+Verification: The Ansible task will poll every 5 seconds until /var/run/salt-onboarding-complete appears, verifying the initial highstate has cleanly finished before continuing with subsequent build steps.
