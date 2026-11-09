@@ -1,87 +1,178 @@
-PTF RPM Repository Automation & Fleet Delivery
-SUSE MULTI-LINUX MANAGER (MLM) STANDARD OPERATING PROCEDURE
-Problem Statement & Solution Summary:
-SUSE Multi-Linux Manager (MLM) currently lacks a native, built-in mechanism to directly import, index, and
-distribute vendor Program Temporary Fixes (PTFs) for Multi Linux Support Minions into channels. This
-operational limitation creates manual friction and delay when hotfixes must be urgently rolled out across
-large enterprise environments.
-What This Solution Provides: An automated, enterprise-ready ingestion pipeline consisting of: (1) an interactive,
-secure credentialed PTF batch downloader; (2) an automated filesystem watcher with 120-second quiet-window
-debouncing; (3) automatic Yum/RPM repository index regeneration ( createrepo_c ); (4) automated MLM channel
-synchronization ( spacewalk-repo-sync ); and (5) targeted Salt orchestration with zero-rebuild CLM injection to
-safely deploy fixes to 1,000+ RHEL 7 / MLS 7 systems without service interruption.
-HOST PLATFORM
-SLES 15 SP7 (MLM Host)
-TARGET FLEET
-RHEL 7 / MLS 7
-(Yum Minions)
-CHANNEL LABEL
-custom-ptf-mls7_ltss
-x86_64
-DEBOUNCE TIMEOUT
-120 Seconds (Inotify)
-1. Architecture & Execution Context
-All download logic, repository metadata generation, filesystem watchers, and channel syncs execute exclusively
-on the MLM Server (SLES 15 SP7). The downstream client fleet consists of 1,000+ RHEL 7 / MLS 7 Salt
-minions managed via yum .
-[ Vendor PTF Portal ] │ (curl batch download via download_ptfs.sh) ▼ [ /pub/ptf_repo/mls7 Direc
-2. Host Dependencies & Directory Setup (MLM Server)
-Install inotify-tools from the SLES 15 SP7 Development Tools module and initialise the repository storage tree:
-# 1. Enable the module and install inotify-tools & createrepo_c
+# PTF RPM Repository Automation & Fleet Delivery
+
+### SUSE Multi-Linux Manager (MLM) Standard Operating Procedure
+
+---
+
+## Overview
+
+### Problem Statement
+
+SUSE Multi-Linux Manager (MLM) lacks a native mechanism to directly import, index, and distribute vendor Program Temporary Fixes (PTFs) for Multi-Linux Support minions into software channels. This limitation introduces manual operational overhead and delays when critical hotfixes must be deployed rapidly across large-scale enterprise environments.
+
+### Solution Architecture
+
+This SOP implements an automated ingestion and delivery pipeline:
+
+1. **Interactive Batch Downloader:** Authenticates against vendor PTF portals and retrieves RPM payloads.
+2. **Filesystem Event Watcher:** Monitors repository storage using `inotify` with a 120-second quiet-window debounce.
+3. **Repository Index Regeneration:** Automatically executes `createrepo_c` upon file arrival.
+4. **Channel Synchronization:** Triggers automated `spacewalk-repo-sync` tasks into MLM.
+5. **Targeted Salt Fleet Orchestration:** Dispatches hotfixes across 1,000+ RHEL 7 / MLS 7 minions using native `yum` execution and zero-rebuild Content Lifecycle Management (CLM) injection.
+
+```
+[ Vendor PTF Portal ]
+         │ (curl batch download via download_ptfs.sh)
+         ▼
+[ /pub/ptf_repo/mls7 Storage ]
+         │ (inotifywait debounce trigger: 120s)
+         ▼
+[ createrepo_c metadata update ]
+         │
+         ▼
+[ spacewalk-repo-sync ] ──► [ MLM Channel: custom-ptf-mls7_ltss-x86_64 ]
+                                      │
+                         ┌────────────┴────────────┐
+                         ▼                         ▼
+             [ Option A: Salt Direct ]   [ Option B: Zero-Rebuild CLM ]
+                         │                         │
+                         └────────────┬────────────┘
+                                      ▼
+                        [ 1,000+ RHEL 7 / MLS 7 Minions ]
+
+```
+
+---
+
+## Environment Specifications
+
+| Parameter | Specification |
+| --- | --- |
+| **MLM Host OS** | SUSE Linux Enterprise Server 15 SP7 |
+| **Target Fleet** | 1,000+ RHEL 7 / MLS 7 Minions (`yum` managed) |
+| **Repository Root** | `/var/lib/containers/storage/volumes/srv-www/_data/htdocs/pub/ptf_repo/mls7` |
+| **Custom Channel Label** | `custom-ptf-mls7_ltss-x86_64` |
+| **Debounce Window** | 120 Seconds |
+
+---
+
+## 1. Host Dependencies & Directory Setup
+
+Execute these steps on the MLM Server (SLES 15 SP7) to enable required modules, install dependencies, and initialize the web-accessible repository path.
+
+```bash
+# 1. Enable the Development Tools module and install tools
 SUSEConnect -p sle-module-development-tools/15.7/x86_64
 zypper refresh && zypper --non-interactive install inotify-tools createrepo_c
-# 2. Prepare web-accessible repository root
-mkdir -p /var/lib/containers/storage/volumes/srv-www/_data/htdocs/pub/ptf_repo/mls7; chmod 755
-/var/lib/containers/storage/volumes/srv-www/_data/htdocs/pub/ptf_repo/mls7 createrepo_c
-/var/lib/containers/storage/volumes/srv-www/_data/htdocs/pub/ptf_repo/mls7
-3. Automated Repository Sync Script
-Script path: /usr/local/bin/sync-ptf-repo.sh (Executable: chmod +x )
-SUSE Multi-Linux Manager — Technical Standard Operating Procedure Page 1 of 4
+
+# 2. Create web-accessible storage and set permissions
+REPO_DIR="/var/lib/containers/storage/volumes/srv-www/_data/htdocs/pub/ptf_repo/mls7"
+mkdir -p "${REPO_DIR}"
+chmod 755 "${REPO_DIR}"
+
+# 3. Initialize repository metadata structure
+createrepo_c "${REPO_DIR}"
+
+```
+
+---
+
+## 2. Automation Scripts
+
+### A. Repository Metadata & Channel Synchronization
+
+Create `/usr/local/bin/sync-ptf-repo.sh` to update repository indexes and initiate MLM channel ingestion:
+
+```bash
 #!/usr/bin/env bash
 set -euo pipefail
+
 REPO_DIR="/var/lib/containers/storage/volumes/srv-www/_data/htdocs/pub/ptf_repo/mls7"
 CHANNEL_LABEL="custom-ptf-mls7_ltss-x86_64"
 LOG_FILE="/var/log/ptf-sync-automation.log"
+
 exec >> "${LOG_FILE}" 2>&1
+
 echo "=== Starting PTF sync at $(date) ==="
+
 if [ -d "${REPO_DIR}" ]; then
-createrepo_c --update "${REPO_DIR}"
+  createrepo_c --update "${REPO_DIR}"
 else
-echo "ERROR: Directory ${REPO_DIR} not found!" >&2 && exit 1
+  echo "ERROR: Directory ${REPO_DIR} not found!" >&2
+  exit 1
 fi
+
 echo "Triggering spacewalk-repo-sync for channel: ${CHANNEL_LABEL}..."
 if command -v mgrctl >/dev/null 2>&1; then
-mgrctl exec -- spacewalk-repo-sync --channel "${CHANNEL_LABEL}" --type yum else
-spacewalk-repo-sync --channel "${CHANNEL_LABEL}" --type yum
+  mgrctl exec -- spacewalk-repo-sync --channel "${CHANNEL_LABEL}" --type yum
+else
+  spacewalk-repo-sync --channel "${CHANNEL_LABEL}" --type yum
 fi
+
 echo "=== Sync completed successfully at $(date) ==="
-4. Inotify Debounce Watcher & Service
-Script path: /usr/local/bin/watch_ptf_repo.sh (debounces downloads by 120s of sustained inactivity):
+
+```
+
+Set script permissions:
+
+```bash
+chmod 750 /usr/local/bin/sync-ptf-repo.sh
+
+```
+
+---
+
+### B. Inotify Debounce Watcher
+
+Create `/usr/local/bin/watch_ptf_repo.sh` to prevent partial synchronization during multi-file transfers:
+
+```bash
 #!/usr/bin/env bash
 set -euo pipefail
+
 REPO_DIR="/var/lib/containers/storage/volumes/srv-www/_data/htdocs/pub/ptf_repo/mls7"
 SYNC_SCRIPT="/usr/local/bin/sync-ptf-repo.sh"
 TIMEOUT_SECS=120
+
 echo "Watching ${REPO_DIR} for RPM changes..."
+
 while true; do
-inotifywait -q -e close_write,moved_to "${REPO_DIR}" >/dev/null 2>&1
-echo "Activity detected. Debouncing for ${TIMEOUT_SECS} seconds..."
-while true; do
-if inotifywait -q -t "${TIMEOUT_SECS}" -e close_write,moved_to "${REPO_DIR}" >/dev/null 2>&1; then
-echo "Additional file incoming. Resetting timer..."
-else
-break
-fi
+  inotifywait -q -e close_write,moved_to "${REPO_DIR}" >/dev/null 2>&1
+  echo "Activity detected. Debouncing for ${TIMEOUT_SECS} seconds..."
+  
+  while true; do
+    if inotifywait -q -t "${TIMEOUT_SECS}" -e close_write,moved_to "${REPO_DIR}" >/dev/null 2>&1; then
+      echo "Additional file incoming. Resetting timer..."
+    else
+      break
+    fi
+  done
+  
+  echo "Quiet window reached. Executing repository sync..."
+  "${SYNC_SCRIPT}"
 done
-echo "Quiet window reached. Executing repository sync..."
-"${SYNC_SCRIPT}"
-done
-Systemd unit configuration: /etc/systemd/system/ptf-watcher.service
-SUSE Multi-Linux Manager — Technical Standard Operating Procedure Page 2 of 4
+
+```
+
+Set script permissions:
+
+```bash
+chmod 750 /usr/local/bin/watch_ptf_repo.sh
+
+```
+
+---
+
+### C. Systemd Unit Setup
+
+Configure the watcher daemon via `/etc/systemd/system/ptf-watcher.service`:
+
+```ini
 [Unit]
 Description=PTF RPM Inotify Debounce Watcher and MLM Sync
 After=network.target local-fs.target
 Wants=local-fs.target
+
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/watch_ptf_repo.sh
@@ -90,60 +181,134 @@ RestartSec=10
 KillMode=control-group
 StandardOutput=journal
 StandardError=journal
+
 [Install]
 WantedBy=multi-user.target
-systemctl daemon-reload && systemctl enable --now ptf-watcher.service
-5. Interactive PTF Batch Downloader
-Script path: /usr/local/bin/download_ptfs.sh . Securely accepts credentials and extracts RPM payloads:
+
+```
+
+Reload systemd and activate the service:
+
+```bash
+systemctl daemon-reload
+systemctl enable --now ptf-watcher.service
+systemctl status ptf-watcher.service --no-pager
+
+```
+
+---
+
+### D. Interactive PTF Batch Downloader
+
+Create `/usr/local/bin/download_ptfs.sh` on the MLM host to pull files directly from authenticated portals:
+
+```bash
 #!/usr/bin/env bash
 set -euo pipefail
+
 TARGET_DIR="/var/lib/containers/storage/volumes/srv-www/_data/htdocs/pub/ptf_repo/mls7"
+
 read -rp "Enter PTF portal username: " PTF_USER
-read -rsp "Enter PTF portal password: " PTF_PASS; echo ""
+read -rsp "Enter PTF portal password: " PTF_PASS
+echo ""
 read -rp "Enter PTF download URL: " URL
+
 [[ "${URL}" != */ ]] && URL="${URL}/"
+
 mkdir -p "${TARGET_DIR}" && cd "${TARGET_DIR}"
+
 echo "Fetching package index from ${URL}..."
 curl -s -u "${PTF_USER}:${PTF_PASS}" "${URL}" | \
-grep -o 'href="[^"]*\.rpm"' | cut -d'"' -f2 | \
-while read -r file; do
-echo "Downloading ${file}..."
-curl -f -u "${PTF_USER}:${PTF_PASS}" -O "${URL}${file}"
-done
+  grep -o 'href="[^"]*\.rpm"' | cut -d'"' -f2 | \
+  while read -r file; do
+    echo "Downloading ${file}..."
+    curl -f -u "${PTF_USER}:${PTF_PASS}" -O "${URL}${file}"
+  done
+
 echo "Download complete. RPMs deposited in ${TARGET_DIR}."
-6. MLM Channel Configuration
-Component Configuration
-Parameter
-Assigned Value
-Software
-Repository
-Label / URL / Type ptf-mls7_ltss-x86_64 |
-http://localhost/pub/ptf_repo/mls7 | yum
-Custom Child
-Channel
-Name / Label /
-Parent
-Custom PTF Channel - MLS 7 LTSS | custom-ptf-mls7_ltss x86_64 |
-RHEL 7 / MLS 7 Base
-SUSE Multi-Linux Manager — Technical Standard Operating Procedure Page 3 of 4
-7. Fleet-Wide Deployment to 1,000+ MLS 7 / RHEL 7 Minions
-Option A: Direct System Group Assignment (Standard Fleet)
-1. In the MLM Web UI, subscribe the MLS7-Fleet system group to the child channel custom-ptf
-mls7_ltss-x86_64 .
-2. Trigger fleet installation via the MLM Salt master (leveraging native yum on the minions):
-mgrctl exec -- salt -G 'systemgroup:MLS7-Fleet' pkg.install <ptf-package-name> # Or direct command-line
-execution:
-mgrctl exec -- salt -G 'systemgroup:MLS7-Fleet' cmd.run "yum clean expire-cache && yum install -y
-<ptf-package-name>"
-Option B: Zero-Rebuild Injection into Frozen CLM Environments
-Zero-Rebuild Workflow: Prevents full CLM project rebuilds by injecting verified PTF packages directly into the
-active frozen clone channels.
-1. Identify the target environment channel label:
+
+```
+
+Set script permissions:
+
+```bash
+chmod 750 /usr/local/bin/download_ptfs.sh
+
+```
+
+---
+
+## 3. MLM Channel Configuration
+
+Configure the repository and child channels within the MLM Web UI or CLI:
+
+| Component | Setting | Value |
+| --- | --- | --- |
+| **Software Repository** | Label | `ptf-mls7_ltss-x86_64` |
+|  | URL | `http://localhost/pub/ptf_repo/mls7` |
+|  | Type | `yum` |
+| **Custom Child Channel** | Channel Name | `Custom PTF Channel - MLS 7 LTSS` |
+|  | Channel Label | `custom-ptf-mls7_ltss-x86_64` |
+|  | Parent Channel | `RHEL 7 / MLS 7 Base` |
+
+---
+
+## 4. Fleet Deployment Options
+
+### Option A: Direct System Group Assignment (Standard Fleet)
+
+1. Navigate to **Systems > System Groups > MLS7-Fleet > Software > Channels** in the MLM Web UI and subscribe the group to `custom-ptf-mls7_ltss-x86_64`.
+2. Dispatch package rollout across all target minions via Salt:
+
+```bash
+# Via Salt pkg module:
+mgrctl exec -- salt -G 'systemgroup:MLS7-Fleet' pkg.install <ptf-package-name>
+
+# Alternatively, run clean cached installation directly:
+mgrctl exec -- salt -G 'systemgroup:MLS7-Fleet' cmd.run "yum clean expire-cache && yum install -y <ptf-package-name>"
+
+```
+
+---
+
+### Option B: Zero-Rebuild Injection into Frozen CLM Environments
+
+Avoids triggering full CLM rebuild cycles by injecting hotfixes directly into active, frozen lifecycle clones.
+
+1. Locate the active target environment channel label:
+```bash
 spacecmd -u admin -p <PWD> -- softwarechannel_list | grep "clm-.*-custom-ptf"
-2. Inject the RPM directly into the target CLM clone:
-spacecmd -u admin -p <PWD> -- softwarechannel_addpackages <CLM_TARGET_CHANNEL> "<ptf
-package-name>*"
-3. Trigger immediate client update across the fleet:
-mgrctl exec -- salt -G 'systemgroup:MLS7-Fleet' cmd.run "yum clean expire-cache && yum install -y
-<ptf-package-name>"
-SUSE Multi-Linux Manager — Technical Standard Operating Procedure Page 4 of 4
+
+```
+
+
+2. Inject the verified PTF RPM directly into the target CLM channel:
+```bash
+spacecmd -u admin -p <PWD> -- softwarechannel_addpackages <CLM_TARGET_CHANNEL> "<ptf-package-name>*"
+
+```
+
+
+3. Trigger client updates immediately across the target fleet:
+```bash
+mgrctl exec -- salt -G 'systemgroup:MLS7-Fleet' cmd.run "yum clean expire-cache && yum install -y <ptf-package-name>"
+
+```
+
+
+
+---
+
+## 5. Verification & Log Auditing
+
+```bash
+# Monitor the live debounce watcher daemon
+journalctl -u ptf-watcher.service -f
+
+# Review synchronization log output
+tail -f /var/log/ptf-sync-automation.log
+
+# Verify minion package installation status
+mgrctl exec -- salt -G 'systemgroup:MLS7-Fleet' cmd.run "rpm -q <ptf-package-name>"
+
+```
